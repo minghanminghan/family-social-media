@@ -1,36 +1,31 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+family social media (private)
 
-## Getting Started
+## features
 
-First, run the development server:
+- posts: text, photo, video, album (carousel)
+- likes, comments, share
+- text-to-speech (Web Speech API, browser-side)
+- semantic search via CLIP embeddings + pgvector
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## stack
+
+- **Frontend:** Next.js (App Router) on Vercel
+- **Database / storage / auth:** Supabase (Postgres + pgvector + file storage)
+- **Embeddings:** Modal worker — CLIP ViT-B/32 for text, images, video keyframes
+
+## setup
+
+1. Copy `.env.local.example` → `.env.local` and fill in values
+2. Run `supabase/migrations/001_init.sql` in Supabase SQL editor
+3. Deploy Modal worker: `modal deploy modal/embed.py`, copy endpoint URLs to `.env.local`
+4. `npm run dev`
+
+## structure
+
 ```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+app/          Next.js pages + API routes
+components/   React UI components
+lib/          Supabase clients, types, server actions
+modal/        Python CLIP worker (Modal)
+supabase/     DB migration
+```

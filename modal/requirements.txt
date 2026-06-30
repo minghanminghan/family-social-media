@@ -1,0 +1,8 @@
+av==17.1.0
+fastapi==0.138.0
+modal==1.5.0
+numpy==2.4.6
+Pillow==12.2.0
+Requests==2.34.2
+torch==2.10.0.dev20250910+cu130
+transformers==5.12.1
