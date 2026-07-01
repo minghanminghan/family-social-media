@@ -176,6 +176,22 @@ export async function createPost(formData: FormData) {
   return post
 }
 
+export async function editPost(postId: string, caption: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  const { error } = await supabase
+    .from('posts')
+    .update({ caption: caption.trim() || null })
+    .eq('id', postId)
+    .eq('author_id', user.id)
+
+  if (error) throw error
+  revalidatePath('/')
+  revalidatePath(`/post/${postId}`)
+}
+
 export async function deletePost(postId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -209,18 +225,39 @@ export async function toggleLike(postId: string, liked: boolean) {
 
 // ── Comments ───────────────────────────────────────────────────────────────
 
-export async function createComment(postId: string, content: string) {
+export async function createComment(postId: string, content: string, parentId?: string | null) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  if (parentId) {
+    const { data: parent } = await supabase.from('comments').select('post_id').eq('id', parentId).single()
+    if (!parent || parent.post_id !== postId) throw new Error('Invalid parent comment')
+  }
+
+  const { error } = await supabase
+    .from('comments')
+    .insert({ post_id: postId, author_id: user.id, content, parent_id: parentId ?? null })
+
+  if (error) throw error
+  revalidatePath(`/post/${postId}`)
+  revalidatePath('/')
+}
+
+export async function editComment(commentId: string, postId: string, content: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Unauthenticated')
 
   const { error } = await supabase
     .from('comments')
-    .insert({ post_id: postId, author_id: user.id, content })
+    .update({ content: content.trim() })
+    .eq('id', commentId)
+    .eq('author_id', user.id)
 
   if (error) throw error
-  revalidatePath(`/post/${postId}`)
   revalidatePath('/')
+  revalidatePath(`/post/${postId}`)
 }
 
 export async function deleteComment(commentId: string) {

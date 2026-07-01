@@ -22,7 +22,7 @@ export default function SearchResults({ query, posts, currentUserId }: Props) {
 
   return (
     <div className="space-y-6">
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      {/* <form onSubmit={handleSubmit} className="flex gap-2">
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
@@ -33,7 +33,7 @@ export default function SearchResults({ query, posts, currentUserId }: Props) {
         <button type="submit" className="bg-gray-900 text-white rounded-lg px-4 text-sm">
           Search
         </button>
-      </form>
+      </form> */}
 
       {query && posts.length === 0 && (
         <p className="text-sm text-gray-400 text-center py-8">No results for &ldquo;{query}&rdquo;</p>

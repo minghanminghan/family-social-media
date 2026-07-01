@@ -2,7 +2,6 @@ import { redirect, notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import NavBar from '@/components/NavBar'
 import PostCard from '@/components/PostCard'
-import CommentSection from '@/components/CommentSection'
 
 export default async function PostPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -16,7 +15,7 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
       *,
       author:profiles!posts_author_id_fkey(*),
       media:post_media(*),
-      likes(user_id),
+      likes(user_id, created_at, user:profiles(*)),
       comments(*, author:profiles(*))
     `)
     .eq('id', id)
@@ -30,7 +29,6 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
       <NavBar userId={user.id} />
       <main className="flex-1 max-w-xl mx-auto w-full px-4 py-6 space-y-4">
         <PostCard post={post} currentUserId={user.id} />
-        <CommentSection post={post} currentUserId={user.id} />
       </main>
     </div>
   )

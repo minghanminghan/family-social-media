@@ -21,8 +21,8 @@ export default async function Home() {
       *,
       author:profiles!posts_author_id_fkey(*),
       media:post_media(*),
-      likes(user_id),
-      comments(id)
+      likes(user_id, created_at, user:profiles(*)),
+      comments(*, author:profiles(*))
     `)
     .order('created_at', { ascending: false })
     .limit(50)

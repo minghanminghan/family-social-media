@@ -1,12 +1,12 @@
 'use client'
 
-import Link from 'next/link'
 import Image from 'next/image'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Post } from '@/lib/types'
-import { toggleLike, deletePost } from '@/lib/actions'
+import { toggleLike, deletePost, editPost } from '@/lib/actions'
 import MediaCarousel from './MediaCarousel'
 import TTSButton from './TTSButton'
+import Comments from './Comments'
 import { createClient } from '@/lib/supabase/client'
 
 interface Props {
@@ -18,8 +18,28 @@ export default function PostCard({ post, currentUserId }: Props) {
   const supabase = createClient()
   const liked = (post.likes ?? []).some(l => l.user_id === currentUserId)
   const likeCount = post.likes?.length ?? 0
-  const commentCount = post.comments?.length ?? 0
   const isOwner = post.author_id === currentUserId
+
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editCaption, setEditCaption] = useState(post.caption ?? '')
+  const [saving, setSaving] = useState(false)
+  const [commentsExpanded, setCommentsExpanded] = useState(false)
+  const commentCount = post.comments?.length ?? 0
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const likers = [...(post.likes ?? [])].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [menuOpen])
 
   function getMediaUrl(path: string) {
     return supabase.storage.from('media').getPublicUrl(path).data.publicUrl
@@ -30,7 +50,24 @@ export default function PostCard({ post, currentUserId }: Props) {
   }
 
   async function handleDelete() {
+    setMenuOpen(false)
     if (confirm('Delete this post?')) await deletePost(post.id)
+  }
+
+  function handleStartEdit() {
+    setMenuOpen(false)
+    setEditCaption(post.caption ?? '')
+    setEditing(true)
+  }
+
+  async function handleSaveEdit() {
+    setSaving(true)
+    try {
+      await editPost(post.id, editCaption)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const speakText = [post.caption, post.type !== 'text' ? `[${post.type}]` : '']
@@ -56,9 +93,31 @@ export default function PostCard({ post, currentUserId }: Props) {
           </span>
         </div>
         {isOwner && (
-          <button onClick={handleDelete} className="text-xs text-gray-300 hover:text-red-400">
-            Delete
-          </button>
+          <div className="relative" ref={menuRef}>
+            <button
+              onClick={() => setMenuOpen(v => !v)}
+              className="text-gray-600 hover:text-gray-900 px-1"
+              aria-label="Post options"
+            >
+              ⋯
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-gray-200 rounded-lg shadow-sm py-1 z-10">
+                <button
+                  onClick={handleStartEdit}
+                  className="w-full text-left text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-50"
+                >
+                  Edit caption
+                </button>
+                <button
+                  onClick={handleDelete}
+                  className="w-full text-left text-xs px-3 py-1.5 text-red-400 hover:bg-gray-50"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -71,8 +130,33 @@ export default function PostCard({ post, currentUserId }: Props) {
       )}
 
       {/* Caption */}
-      {post.caption && (
-        <p className="px-4 pt-3 pb-1 text-sm">{post.caption}</p>
+      {editing ? (
+        <div className="px-4 pt-3 pb-1 space-y-2">
+          <textarea
+            value={editCaption}
+            onChange={e => setEditCaption(e.target.value)}
+            rows={3}
+            autoFocus
+            className="w-full resize-none text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-300"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setEditing(false)}
+              className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSaveEdit}
+              disabled={saving}
+              className="text-xs bg-gray-900 text-white rounded-lg px-4 py-1.5 disabled:opacity-40"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        post.caption && <p className="px-4 pt-3 pb-1 text-sm">{post.caption}</p>
       )}
 
       {/* Actions */}
@@ -89,13 +173,24 @@ export default function PostCard({ post, currentUserId }: Props) {
           )}
           <span className="text-gray-500">{likeCount}</span>
         </button>
-        <Link href={`/post/${post.id}`} className="flex items-center gap-1 text-sm text-gray-500">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20.656 17.008a9.993 9.993 0 1 0-3.59 3.615L21 22Z" />
+        <button
+          onClick={() => setCommentsExpanded(v => !v)}
+          aria-label={commentsExpanded ? 'Hide comments' : 'Show comments'}
+          className="flex items-center gap-1 text-sm"
+        >
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z" />
           </svg>
-          <span>{commentCount}</span>
-        </Link>
+          <span className="text-gray-500">{commentCount}</span>
+        </button>
+        {likers.length > 0 && (
+          <p className="text-xs text-gray-400">
+            Liked by: {likers.map(like => like.user?.display_name ?? 'Someone').join(', ')}
+          </p>
+        )}
       </div>
+
+      <Comments post={post} currentUserId={currentUserId} expanded={commentsExpanded} />
     </article>
   )
 }

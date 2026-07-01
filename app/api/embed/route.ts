@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 // Called by lib/actions.ts after a post is created to trigger Modal embedding
 export async function POST(req: NextRequest) {
@@ -11,10 +11,7 @@ export async function POST(req: NextRequest) {
   const { post_id } = await req.json()
 
   // Fetch the post + media to pass to Modal
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SECRET_KEY!
-  )
+  const supabase = createAdminClient()
 
   const { data: post } = await supabase
     .from('posts')

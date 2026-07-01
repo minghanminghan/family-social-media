@@ -27,7 +27,7 @@ export interface Post {
   // joined
   author?: Profile
   media?: PostMedia[]
-  likes?: { user_id: string }[]
+  likes?: { user_id: string; created_at: string; user?: Profile }[]
   comments?: Comment[]
   like_count?: number
   comment_count?: number
@@ -37,6 +37,7 @@ export interface Comment {
   id: string
   post_id: string
   author_id: string
+  parent_id: string | null
   content: string
   created_at: string
   author?: Profile
