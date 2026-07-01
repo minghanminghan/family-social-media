@@ -1,6 +1,6 @@
 # family-social-media
 
-Private, invite-only social feed for family (posts, likes, threaded comments, browser TTS, CLIP-based semantic search). Single Next.js app + a Python embedding worker on Modal.
+Private, invite-only social feed for family (posts, likes, threaded comments, CLIP-based semantic search). Single Next.js app + a Python embedding worker on Modal.
 
 ## Stack
 
@@ -18,6 +18,7 @@ components/     client components ('use client')
 lib/actions.ts  all server actions ('use server') — the only place writes happen
 lib/supabase/   client.ts (browser), server.ts (RSC/cookie-based), admin.ts (service-role, bypasses RLS)
 lib/types.ts    shared DB row / joined-query types
+lib/hooks.ts    shared client hooks (e.g. useClickOutside, used by components/OptionsMenu.tsx)
 modal/embed.py  CLIP embedding worker, deployed separately via `modal deploy`
 supabase/migrations/  hand-written numbered SQL, applied manually in the Supabase SQL editor (no CLI migration runner in use)
 ```

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import NavBar from '@/components/NavBar'
 import SearchResults from '@/components/SearchResults'
+import { Post } from '@/lib/types'
 
 interface Props {
   searchParams: Promise<{ q?: string }>
@@ -13,7 +14,7 @@ export default async function SearchPage({ searchParams }: Props) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  let posts: object[] = []
+  let posts: Post[] = []
 
   if (q && q.trim().length > 0) {
     // Get query embedding from Modal, then search with pgvector
@@ -53,7 +54,7 @@ export default async function SearchPage({ searchParams }: Props) {
     <div className="min-h-screen flex flex-col">
       <NavBar userId={user.id} />
       <main className="flex-1 max-w-xl mx-auto w-full px-4 py-6">
-        <SearchResults query={q ?? ''} posts={posts as object[]} currentUserId={user.id} />
+        <SearchResults query={q ?? ''} posts={posts} currentUserId={user.id} />
       </main>
     </div>
   )

@@ -1,13 +1,15 @@
 'use client'
 
 import Image from 'next/image'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Post } from '@/lib/types'
 import { toggleLike, deletePost, editPost } from '@/lib/actions'
 import MediaCarousel from './MediaCarousel'
-import TTSButton from './TTSButton'
 import Comments from './Comments'
+import OptionsMenu from './OptionsMenu'
 import { createClient } from '@/lib/supabase/client'
+
+const MAX_VISIBLE_LIKERS = 5
 
 interface Props {
   post: Post
@@ -20,26 +22,18 @@ export default function PostCard({ post, currentUserId }: Props) {
   const likeCount = post.likes?.length ?? 0
   const isOwner = post.author_id === currentUserId
 
-  const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editCaption, setEditCaption] = useState(post.caption ?? '')
   const [saving, setSaving] = useState(false)
   const [commentsExpanded, setCommentsExpanded] = useState(false)
   const commentCount = post.comments?.length ?? 0
-  const menuRef = useRef<HTMLDivElement>(null)
 
   const likers = [...(post.likes ?? [])].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   )
-
-  useEffect(() => {
-    if (!menuOpen) return
-    function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [menuOpen])
+  const likerNames = likers.map(like => like.user?.display_name ?? 'Someone')
+  const visibleLikerNames = likerNames.slice(0, MAX_VISIBLE_LIKERS)
+  const hasMoreLikers = likerNames.length > MAX_VISIBLE_LIKERS
 
   function getMediaUrl(path: string) {
     return supabase.storage.from('media').getPublicUrl(path).data.publicUrl
@@ -50,12 +44,10 @@ export default function PostCard({ post, currentUserId }: Props) {
   }
 
   async function handleDelete() {
-    setMenuOpen(false)
     if (confirm('Delete this post?')) await deletePost(post.id)
   }
 
   function handleStartEdit() {
-    setMenuOpen(false)
     setEditCaption(post.caption ?? '')
     setEditing(true)
   }
@@ -69,9 +61,6 @@ export default function PostCard({ post, currentUserId }: Props) {
       setSaving(false)
     }
   }
-
-  const speakText = [post.caption, post.type !== 'text' ? `[${post.type}]` : '']
-    .filter(Boolean).join(' ')
 
   return (
     <article className="border border-gray-100 rounded-xl overflow-hidden">
@@ -93,39 +82,23 @@ export default function PostCard({ post, currentUserId }: Props) {
           </span>
         </div>
         {isOwner && (
-          <div className="relative" ref={menuRef}>
-            <button
-              onClick={() => setMenuOpen(v => !v)}
-              className="text-gray-600 hover:text-gray-900 px-1"
-              aria-label="Post options"
-            >
-              ⋯
-            </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-gray-200 rounded-lg shadow-sm py-1 z-10">
-                <button
-                  onClick={handleStartEdit}
-                  className="w-full text-left text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-50"
-                >
-                  Edit caption
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="w-full text-left text-xs px-3 py-1.5 text-red-400 hover:bg-gray-50"
-                >
-                  Delete
-                </button>
-              </div>
-            )}
-          </div>
+          <OptionsMenu
+            ariaLabel="Post options"
+            menuWidthClassName="w-32"
+            items={[
+              { label: 'Edit caption', onClick: handleStartEdit },
+              { label: 'Delete', onClick: handleDelete, danger: true },
+            ]}
+          />
         )}
       </div>
 
       {/* Media */}
       {post.media && post.media.length > 0 && (
         <MediaCarousel
-          items={post.media.sort((a, b) => a.position - b.position)}
+          items={[...post.media].sort((a, b) => a.position - b.position)}
           getUrl={getMediaUrl}
+          alt={post.caption ?? ''}
         />
       )}
 
@@ -185,7 +158,7 @@ export default function PostCard({ post, currentUserId }: Props) {
         </button>
         {likers.length > 0 && (
           <p className="text-xs text-gray-400">
-            Liked by: {likers.map(like => like.user?.display_name ?? 'Someone').join(', ')}
+            Liked by: {visibleLikerNames.join(', ')}{hasMoreLikers ? '…' : ''}
           </p>
         )}
       </div>

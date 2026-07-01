@@ -7,9 +7,10 @@ import { PostMedia } from '@/lib/types'
 interface Props {
   items: PostMedia[]
   getUrl: (path: string) => string
+  alt?: string
 }
 
-export default function MediaCarousel({ items, getUrl }: Props) {
+export default function MediaCarousel({ items, getUrl, alt = '' }: Props) {
   const [index, setIndex] = useState(0)
 
   if (items.length === 0) return null
@@ -30,7 +31,7 @@ export default function MediaCarousel({ items, getUrl }: Props) {
       ) : (
         <Image
           src={url}
-          alt=""
+          alt={alt}
           fill
           className="object-contain"
           unoptimized

@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Comment } from '@/lib/types'
 import { createComment, deleteComment, editComment } from '@/lib/actions'
+import OptionsMenu from './OptionsMenu'
 
 export interface CommentNode extends Comment {
   replies: CommentNode[]
@@ -26,22 +27,11 @@ export default function CommentThread({ comment, postId, currentUserId, depth, a
   const replying = activeReplyId === comment.id
   const [replyText, setReplyText] = useState('')
   const [loading, setLoading] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState(comment.content)
   const [saving, setSaving] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
 
   const replyCount = countReplies(comment)
-
-  useEffect(() => {
-    if (!menuOpen) return
-    function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [menuOpen])
 
   async function handleReply(e: React.FormEvent) {
     e.preventDefault()
@@ -57,13 +47,11 @@ export default function CommentThread({ comment, postId, currentUserId, depth, a
   }
 
   function handleStartEdit() {
-    setMenuOpen(false)
     setEditText(comment.content)
     setEditing(true)
   }
 
   async function handleDelete() {
-    setMenuOpen(false)
     if (confirm('Delete this comment?')) await deleteComment(comment.id)
   }
 
@@ -122,31 +110,14 @@ export default function CommentThread({ comment, postId, currentUserId, depth, a
         )}
 
         {comment.author_id === currentUserId && !editing && (
-          <div className="relative shrink-0" ref={menuRef}>
-            <button
-              onClick={() => setMenuOpen(v => !v)}
-              className="text-gray-600 hover:text-gray-900 px-1"
-              aria-label="Comment options"
-            >
-              ⋯
-            </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full mt-1 w-28 bg-white border border-gray-200 rounded-lg shadow-sm py-1 z-10">
-                <button
-                  onClick={handleStartEdit}
-                  className="w-full text-left text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-50"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="w-full text-left text-xs px-3 py-1.5 text-red-400 hover:bg-gray-50"
-                >
-                  Delete
-                </button>
-              </div>
-            )}
-          </div>
+          <OptionsMenu
+            ariaLabel="Comment options"
+            menuWidthClassName="w-28"
+            items={[
+              { label: 'Edit', onClick: handleStartEdit },
+              { label: 'Delete', onClick: handleDelete, danger: true },
+            ]}
+          />
         )}
       </div>
 
