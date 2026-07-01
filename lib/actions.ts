@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { after } from 'next/server'
 import { createClient } from './supabase/server'
 import { PostType } from './types'
 
@@ -63,12 +64,17 @@ export async function createPost(formData: FormData) {
     }
   }
 
-  // Kick off embedding asynchronously (fire-and-forget via API route)
-  void fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/embed`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-embed-secret': process.env.EMBED_SECRET! },
-    body: JSON.stringify({ post_id: post.id }),
-  }).catch(() => {})
+  // Post (with file contents already stored) is ready to render immediately.
+  // Embedding runs after the response is sent, so it never blocks the post
+  // from showing up on refresh; /api/embed upserts the embedding back in
+  // once Modal responds.
+  after(() =>
+    fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-embed-secret': process.env.EMBED_SECRET! },
+      body: JSON.stringify({ post_id: post.id }),
+    }).catch(err => console.error('Embed kickoff failed', err))
+  )
 
   revalidatePath('/')
   return post

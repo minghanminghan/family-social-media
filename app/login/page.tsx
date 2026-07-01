@@ -50,7 +50,7 @@ export default function LoginPage() {
           <div className="space-y-2 text-center">
             <h1 className="text-2xl font-semibold">Enter code</h1>
             <p className="text-sm text-gray-500">
-              We sent a code to <span className="font-medium text-gray-900">{email}</span>
+              We sent a code to <span className="font-medium text-gray-900">{email}. Please check your spam if you don't see it in your inbox.</span>
             </p>
           </div>
           <form onSubmit={handleVerifyOtp} className="space-y-4">

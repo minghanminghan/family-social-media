@@ -10,11 +10,11 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: post } = await supabase
+  const { data: post, error } = await supabase
     .from('posts')
     .select(`
       *,
-      author:profiles(*),
+      author:profiles!posts_author_id_fkey(*),
       media:post_media(*),
       likes(user_id),
       comments(*, author:profiles(*))
@@ -22,6 +22,7 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
     .eq('id', id)
     .single()
 
+  if (error) console.error('Failed to load post', error)
   if (!post) notFound()
 
   return (

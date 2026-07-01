@@ -78,14 +78,23 @@ export default function PostCard({ post, currentUserId }: Props) {
       {/* Actions */}
       <div className="flex items-center gap-4 px-4 py-3">
         <button onClick={handleLike} className="flex items-center gap-1 text-sm">
-          <span>{liked ? '♥' : '♡'}</span>
+          {liked ? (
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="#ed4956">
+              <path d="M16.792 3.904A4.989 4.989 0 0 1 21.5 9.122c0 3.072-2.652 4.959-5.197 7.222-2.512 2.243-3.865 3.469-4.303 3.752-.477-.309-2.143-1.823-4.303-3.752C5.141 14.072 2.5 12.167 2.5 9.122a4.989 4.989 0 0 1 4.708-5.218 4.21 4.21 0 0 1 3.675 1.941c.84 1.175.98 1.763 1.12 1.763s.278-.588 1.11-1.766a4.17 4.17 0 0 1 3.679-1.938Z" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16.792 3.904A4.989 4.989 0 0 1 21.5 9.122c0 3.072-2.652 4.959-5.197 7.222-2.512 2.243-3.865 3.469-4.303 3.752-.477-.309-2.143-1.823-4.303-3.752C5.141 14.072 2.5 12.167 2.5 9.122a4.989 4.989 0 0 1 4.708-5.218 4.21 4.21 0 0 1 3.675 1.941c.84 1.175.98 1.763 1.12 1.763s.278-.588 1.11-1.766a4.17 4.17 0 0 1 3.679-1.938Z" />
+            </svg>
+          )}
           <span className="text-gray-500">{likeCount}</span>
         </button>
         <Link href={`/post/${post.id}`} className="flex items-center gap-1 text-sm text-gray-500">
-          <span>💬</span>
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20.656 17.008a9.993 9.993 0 1 0-3.59 3.615L21 22Z" />
+          </svg>
           <span>{commentCount}</span>
         </Link>
-        <TTSButton text={speakText} />
       </div>
     </article>
   )

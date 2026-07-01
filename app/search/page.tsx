@@ -17,7 +17,7 @@ export default async function SearchPage({ searchParams }: Props) {
 
   if (q && q.trim().length > 0) {
     // Get query embedding from Modal, then search with pgvector
-    const embedRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/embed_query`, {
+    const embedRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/embed/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-embed-secret': process.env.EMBED_SECRET! },
       body: JSON.stringify({ text: q }),
@@ -36,7 +36,7 @@ export default async function SearchPage({ searchParams }: Props) {
         const postIds = results.map((r: { post_id: string }) => r.post_id)
         const { data } = await supabase
           .from('posts')
-          .select(`*, author:profiles(*), media:post_media(*), likes(user_id)`)
+          .select(`*, author:profiles!posts_author_id_fkey(*), media:post_media(*), likes(user_id)`)
           .in('id', postIds)
 
         // Preserve similarity ordering

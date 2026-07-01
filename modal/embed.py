@@ -2,14 +2,20 @@
 Modal CLIP embedding worker.
 
 Exposes two web endpoints:
-  POST /embed        — embed a post (text, image, video, carousel) → 512-dim vector
-  POST /embed_query  — embed a search query text → 512-dim vector
+  POST /embed        — accepts a post (text, image, video, carousel), embeds it in
+                        the background, and POSTs the result to the caller-provided
+                        callback_url when done (so the HTTP request returns instantly
+                        instead of holding the caller open for the GPU job)
+  POST /embed_query  — embed a search query text → 512-dim vector (synchronous;
+                        text-only encoding is fast enough to return inline)
 
 Deploy:
   modal deploy modal/embed.py
 
 Set these env vars in Modal secrets (named "family-app"):
-  SUPABASE_URL, SUPABASE_SECRET_KEY  (not strictly needed here, caller handles DB writes)
+  EMBED_CALLBACK_SECRET  — sent as `Authorization: Bearer` on the callback POST so
+                            /api/embed/callback can verify it came from Modal. Must
+                            match EMBED_CALLBACK_SECRET in the Next.js app's env.
 """
 
 import io
@@ -40,7 +46,7 @@ CLIP_MODEL = "openai/clip-vit-base-patch32"
 image = (
     modal.Image.debian_slim()
     .pip_install(
-        "transformers",
+        "transformers==4.46.3",
         "torch",
         "Pillow",
         "requests",
@@ -66,14 +72,20 @@ class Embedder:
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
         inputs = self.processor(text=texts, return_tensors="pt", padding=True, truncation=True)
         with torch.no_grad():
-            features = self.model.get_text_features(**inputs)
+            # get_text_features() can return the raw BaseModelOutputWithPooling
+            # from text_model() instead of a projected tensor depending on the
+            # installed transformers version. Call the submodule + projection
+            # directly so the output shape/type is stable across versions.
+            pooled_output = self.model.text_model(**inputs).pooler_output
+            features = self.model.text_projection(pooled_output)
         features = features / features.norm(dim=-1, keepdim=True)
         return features.cpu().numpy()
 
     def _embed_images(self, images) -> np.ndarray:
         inputs = self.processor(images=images, return_tensors="pt")
         with torch.no_grad():
-            features = self.model.get_image_features(**inputs)
+            pooled_output = self.model.vision_model(**inputs).pooler_output
+            features = self.model.visual_projection(pooled_output)
         features = features / features.norm(dim=-1, keepdim=True)
         return features.cpu().numpy()
 
@@ -151,6 +163,35 @@ class Embedder:
         return vec.tolist()
 
 
+@app.function(image=image, secrets=[modal.Secret.from_name("family-app")], timeout=300)
+def embed_and_notify(
+    post_id: str,
+    post_type: str,
+    caption: str | None,
+    media_urls: list[str],
+    callback_url: str,
+) -> None:
+    """Runs the (potentially slow, GPU-bound) embedding job, then reports the
+    result back to the caller's callback_url. Runs as a separate Modal
+    invocation (via .spawn) so the original HTTP request isn't held open."""
+    callback_secret = os.environ["EMBED_CALLBACK_SECRET"]
+    try:
+        vector = Embedder().embed_post.remote(post_type, caption, media_urls)
+        payload = {"post_id": post_id, "embedding": vector}
+    except Exception as e:
+        payload = {"post_id": post_id, "error": str(e)}
+
+    try:
+        requests.post(
+            callback_url,
+            json=payload,
+            headers={"Authorization": f"Bearer {callback_secret}"},
+            timeout=30,
+        )
+    except Exception as e:
+        print(f"Failed to deliver embed callback for {post_id}: {e}")
+
+
 @app.function(image=image, secrets=[modal.Secret.from_name("family-app")])
 @modal.fastapi_endpoint(method="POST")
 async def embed(request: Request):
@@ -160,16 +201,16 @@ async def embed(request: Request):
     post_type = body.get("type")
     caption = body.get("caption")
     media_urls = body.get("media_urls", [])
+    callback_url = body.get("callback_url")
 
     if not post_type:
         raise HTTPException(status_code=400, detail="Missing type")
+    if not callback_url:
+        raise HTTPException(status_code=400, detail="Missing callback_url")
 
-    try:
-        vector = await Embedder().embed_post.remote.aio(post_type, caption, media_urls)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    embed_and_notify.spawn(post_id, post_type, caption, media_urls, callback_url)
 
-    return JSONResponse({"post_id": post_id, "embedding": vector})
+    return JSONResponse({"post_id": post_id, "status": "accepted"}, status_code=202)
 
 
 @app.function(image=image, secrets=[modal.Secret.from_name("family-app")])

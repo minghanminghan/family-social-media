@@ -30,6 +30,8 @@ export async function POST(req: NextRequest) {
     return data.publicUrl
   })
 
+  // Modal embeds in the background and POSTs the result to /api/embed/callback
+  // once done, so this request doesn't block on the GPU job.
   const modalRes = await fetch(`${process.env.MODAL_EMBED_URL}`, {
     method: 'POST',
     headers: {
@@ -41,21 +43,15 @@ export async function POST(req: NextRequest) {
       type: post.type,
       caption: post.caption,
       media_urls: mediaUrls,
+      callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/embed/callback`,
     }),
   })
 
   if (!modalRes.ok) {
     const text = await modalRes.text()
-    console.error('Modal embed error', text)
+    console.error('Modal embed dispatch error', text)
     return NextResponse.json({ error: 'Modal error' }, { status: 502 })
   }
 
-  const { embedding } = await modalRes.json()
-
-  await supabase
-    .from('posts')
-    .update({ embedding })
-    .eq('id', post_id)
-
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, status: 'accepted' }, { status: 202 })
 }

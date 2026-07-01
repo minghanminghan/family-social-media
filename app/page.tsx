@@ -9,17 +9,19 @@ export default async function Home() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: posts } = await supabase
+  const { data: posts, error } = await supabase
     .from('posts')
     .select(`
       *,
-      author:profiles(*),
+      author:profiles!posts_author_id_fkey(*),
       media:post_media(*),
       likes(user_id),
       comments(id)
     `)
     .order('created_at', { ascending: false })
     .limit(50)
+
+  if (error) console.error('Failed to load posts', error)
 
   return (
     <div className="min-h-screen flex flex-col">
