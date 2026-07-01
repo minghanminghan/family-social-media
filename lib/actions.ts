@@ -17,10 +17,13 @@ export async function sendOtp(email: string) {
   const admin = createAdminClient()
 
   // Only known (i.e. previously approved) emails ever get a sign-in code.
+  // ilike is case-insensitive but treats % and _ as wildcards, so escape
+  // them first — otherwise an email like "%" would match every profile.
+  const escapedEmail = normalizedEmail.replace(/[%_\\]/g, '\\$&')
   const { data: existing } = await admin
     .from('profiles')
     .select('id')
-    .ilike('email', normalizedEmail)
+    .ilike('email', escapedEmail)
     .maybeSingle()
 
   if (!existing) {
@@ -119,6 +122,20 @@ export async function denyAccessRequest(requestId: string) {
 
 // ── Posts ──────────────────────────────────────────────────────────────────
 
+// Storage path/media_type are derived from this whitelist rather than the
+// client-supplied filename or File.type directly, since both are attacker-
+// controlled and were previously used unsanitized to build the storage path.
+const MEDIA_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+}
+
 export async function createPost(formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -140,16 +157,16 @@ export async function createPost(formData: FormData) {
   if (files.length > 0 && files[0].size > 0) {
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
-      const ext = file.name.split('.').pop()
+      const ext = MEDIA_EXTENSIONS[file.type]
+      if (!ext) throw new Error(`Unsupported file type: ${file.type}`)
+      const mediaType = file.type.startsWith('video/') ? 'video' : 'image'
       const path = `${user.id}/${post.id}/${i}.${ext}`
 
       const { error: uploadError } = await supabase.storage
         .from('media')
-        .upload(path, file)
+        .upload(path, file, { contentType: file.type })
 
       if (uploadError) throw uploadError
-
-      const mediaType = file.type.startsWith('video') ? 'video' : 'image'
 
       await supabase.from('post_media').insert({
         post_id: post.id,
@@ -197,13 +214,33 @@ export async function deletePost(postId: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Unauthenticated')
 
-  const { error } = await supabase
+  // Storage paths must be read before the row (and its post_media rows,
+  // via ON DELETE CASCADE) are gone.
+  const { data: media } = await supabase
+    .from('post_media')
+    .select('storage_path')
+    .eq('post_id', postId)
+
+  const { data: deleted, error } = await supabase
     .from('posts')
     .delete()
     .eq('id', postId)
     .eq('author_id', user.id)
+    .select('id')
 
   if (error) throw error
+  // Zero rows means the post didn't exist or wasn't owned by this user —
+  // bail out without touching storage so a non-owner can't trigger deletion
+  // of someone else's media by calling deletePost on their post id.
+  if (!deleted || deleted.length === 0) throw new Error('Post not found')
+
+  if (media && media.length > 0) {
+    const { error: removeError } = await supabase.storage
+      .from('media')
+      .remove(media.map(m => m.storage_path))
+    if (removeError) console.error(`Failed to remove storage for post ${postId}`, removeError)
+  }
+
   revalidatePath('/')
 }
 
