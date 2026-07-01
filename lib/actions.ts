@@ -3,22 +3,118 @@
 import { revalidatePath } from 'next/cache'
 import { after } from 'next/server'
 import { createClient } from './supabase/server'
+import { createAdminClient } from './supabase/admin'
 import { PostType } from './types'
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase()
+}
+
 export async function sendOtp(email: string) {
+  const normalizedEmail = normalizeEmail(email)
+  const admin = createAdminClient()
+
+  // Only known (i.e. previously approved) emails ever get a sign-in code.
+  const { data: existing } = await admin
+    .from('profiles')
+    .select('id')
+    .ilike('email', normalizedEmail)
+    .maybeSingle()
+
+  if (!existing) {
+    const { error } = await admin
+      .from('access_requests')
+      .upsert(
+        { email: normalizedEmail, status: 'pending', decided_at: null, decided_by: null },
+        { onConflict: 'email' }
+      )
+    if (error) return { error: error.message }
+    return { error: null, pending: true }
+  }
+
   const supabase = await createClient()
-  const { error } = await supabase.auth.signInWithOtp({ email })
+  const { error } = await supabase.auth.signInWithOtp({ email: normalizedEmail })
   if (error) return { error: error.message }
-  return { error: null }
+  return { error: null, pending: false }
 }
 
 export async function verifyOtp(email: string, token: string) {
   const supabase = await createClient()
-  const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' })
+  const { error } = await supabase.auth.verifyOtp({ email: normalizeEmail(email), token, type: 'email' })
   if (error) return { error: error.message }
   return { error: null }
+}
+
+// ── Admin ──────────────────────────────────────────────────────────────────
+
+async function requireAdmin() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('is_admin')
+    .eq('id', user.id)
+    .single()
+
+  if (!profile?.is_admin) throw new Error('Forbidden')
+  return user
+}
+
+export async function getAccessRequests() {
+  await requireAdmin()
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('access_requests')
+    .select('*')
+    .order('requested_at', { ascending: false })
+
+  if (error) throw error
+  return data
+}
+
+export async function approveAccessRequest(requestId: string) {
+  const admin = await requireAdmin()
+  const supabase = await createClient()
+
+  const { data: request, error: fetchError } = await supabase
+    .from('access_requests')
+    .select('email, status')
+    .eq('id', requestId)
+    .single()
+  if (fetchError) throw fetchError
+  if (request.status !== 'pending') return
+
+  const adminClient = createAdminClient()
+  const { error: createError } = await adminClient.auth.admin.createUser({
+    email: request.email,
+    email_confirm: false,
+  })
+  if (createError) throw createError
+
+  const { error } = await supabase
+    .from('access_requests')
+    .update({ status: 'approved', decided_at: new Date().toISOString(), decided_by: admin.id })
+    .eq('id', requestId)
+  if (error) throw error
+
+  revalidatePath('/admin/requests')
+}
+
+export async function denyAccessRequest(requestId: string) {
+  const admin = await requireAdmin()
+  const supabase = await createClient()
+
+  const { error } = await supabase
+    .from('access_requests')
+    .update({ status: 'denied', decided_at: new Date().toISOString(), decided_by: admin.id })
+    .eq('id', requestId)
+  if (error) throw error
+
+  revalidatePath('/admin/requests')
 }
 
 // ── Posts ──────────────────────────────────────────────────────────────────

@@ -46,3 +46,12 @@ export interface SearchResult {
   post: Post
   similarity: number
 }
+
+export interface AccessRequest {
+  id: string
+  email: string
+  status: 'pending' | 'approved' | 'denied'
+  requested_at: string
+  decided_at: string | null
+  decided_by: string | null
+}

@@ -9,6 +9,12 @@ export default async function Home() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('is_admin')
+    .eq('id', user.id)
+    .single()
+
   const { data: posts, error } = await supabase
     .from('posts')
     .select(`
@@ -25,7 +31,7 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <NavBar userId={user.id} />
+      <NavBar userId={user.id} isAdmin={profile?.is_admin ?? false} />
       <main className="flex-1 max-w-xl mx-auto w-full px-4 py-6 space-y-6">
         <CreatePost />
         <Feed posts={posts ?? []} currentUserId={user.id} />

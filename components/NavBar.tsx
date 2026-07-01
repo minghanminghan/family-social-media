@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import SearchBar from './SearchBar'
 
-export default function NavBar({ userId }: { userId: string }) {
+export default function NavBar({ userId, isAdmin }: { userId: string; isAdmin?: boolean }) {
   const router = useRouter()
   const supabase = createClient()
 
@@ -22,6 +22,11 @@ export default function NavBar({ userId }: { userId: string }) {
         <div className="flex-1">
           <SearchBar />
         </div>
+        {isAdmin && (
+          <Link href="/admin/requests" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">
+            Admin
+          </Link>
+        )}
         <button
           onClick={signOut}
           className="text-xs text-gray-400 hover:text-gray-700 shrink-0"

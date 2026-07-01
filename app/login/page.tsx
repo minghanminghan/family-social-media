@@ -10,6 +10,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
+  const [pending, setPending] = useState(false)
   const router = useRouter()
 
   async function handleSendOtp(e: React.FormEvent) {
@@ -21,6 +22,8 @@ export default function LoginPage() {
 
     if (result.error) {
       setError(result.error)
+    } else if (result.pending) {
+      setPending(true)
     } else {
       setSent(true)
     }
@@ -43,6 +46,25 @@ export default function LoginPage() {
     }
   }
 
+  if (pending) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-sm space-y-6 text-center">
+          <h1 className="text-2xl font-semibold">Request sent</h1>
+          <p className="text-sm text-gray-500">
+            Thanks! Your request has been sent to the family admin for approval. You&apos;ll be able to sign in once it&apos;s approved.
+          </p>
+          <button
+            onClick={() => { setPending(false); setEmail('') }}
+            className="w-full text-sm text-gray-500 underline"
+          >
+            Use a different email
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   if (sent) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
@@ -58,7 +80,7 @@ export default function LoginPage() {
               type="text"
               inputMode="numeric"
               autoComplete="one-time-code"
-              placeholder="6-digit code"
+              placeholder="one-time code"
               value={otp}
               onChange={e => setOtp(e.target.value)}
               required
