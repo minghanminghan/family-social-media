@@ -5,7 +5,15 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import SearchBar from './SearchBar'
 
-export default function NavBar({ userId, isAdmin }: { userId: string; isAdmin?: boolean }) {
+export default function NavBar({
+  userId,
+  username,
+  isAdmin,
+}: {
+  userId: string
+  username?: string | null
+  isAdmin?: boolean
+}) {
   const router = useRouter()
   const supabase = createClient()
 
@@ -22,6 +30,9 @@ export default function NavBar({ userId, isAdmin }: { userId: string; isAdmin?: 
         <div className="flex-1">
           <SearchBar />
         </div>
+        <Link href={`/profile/${username ?? userId}`} className="text-xs text-gray-400 hover:text-gray-700 shrink-0">
+          Profile
+        </Link>
         {isAdmin && (
           <Link href="/admin/requests" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">
             Admin

@@ -9,6 +9,12 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('username, is_admin')
+    .eq('id', user.id)
+    .single()
+
   const { data: post, error } = await supabase
     .from('posts')
     .select(`
@@ -26,7 +32,7 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
 
   return (
     <div className="min-h-screen flex flex-col">
-      <NavBar userId={user.id} />
+      <NavBar userId={user.id} username={profile?.username ?? null} isAdmin={profile?.is_admin ?? false} />
       <main className="flex-1 max-w-xl mx-auto w-full px-4 py-6 space-y-4">
         <PostCard post={post} currentUserId={user.id} />
       </main>

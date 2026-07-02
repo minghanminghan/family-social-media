@@ -1,25 +1,23 @@
+'use client'
+
 import { Post } from '@/lib/types'
-import PostCard from './PostCard'
+import { getFeedPosts } from '@/lib/actions'
+import InfiniteScroll from './InfiniteScroll'
 
 interface Props {
   posts: Post[]
+  hasMore: boolean
   currentUserId: string
 }
 
-export default function Feed({ posts, currentUserId }: Props) {
-  if (posts.length === 0) {
-    return (
-      <p className="text-center text-sm text-gray-400 py-12">
-        No posts yet. Be the first!
-      </p>
-    )
-  }
-
+export default function Feed({ posts, hasMore, currentUserId }: Props) {
   return (
-    <div className="space-y-4">
-      {posts.map(post => (
-        <PostCard key={post.id} post={post} currentUserId={currentUserId} />
-      ))}
-    </div>
+    <InfiniteScroll
+      initialPosts={posts}
+      initialHasMore={hasMore}
+      loadMore={getFeedPosts}
+      currentUserId={currentUserId}
+      emptyMessage="No posts yet. Be the first!"
+    />
   )
 }

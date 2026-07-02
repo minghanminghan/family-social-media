@@ -5,6 +5,7 @@ export interface Profile {
   id: string
   display_name: string
   avatar_url: string | null
+  username: string | null
   created_at: string
 }
 
@@ -32,6 +33,10 @@ export interface Post {
   comments?: Comment[]
   like_count?: number
   comment_count?: number
+  // search-only
+  similarity?: number
+  text_rank?: number
+  is_exact?: boolean
 }
 
 export interface Comment {

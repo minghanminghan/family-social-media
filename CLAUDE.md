@@ -15,11 +15,12 @@ Next.js 16 renamed `middleware.ts` to `proxy.ts` (root-level `proxy.ts` here) �
 ```
 app/            routes (App Router) + API routes under app/api
 components/     client components ('use client')
-lib/actions.ts  all server actions ('use server') — the only place writes happen
+lib/actions.ts  server actions ('use server') — the only place writes happen, plus the paginated feed/search reads (getFeedPosts, searchPosts) so page.tsx and the infinite-scroll client path share one query shape
 lib/supabase/   client.ts (browser), server.ts (RSC/cookie-based), admin.ts (service-role, bypasses RLS)
 lib/mediaKinds.ts  upload MIME whitelist (kind/extension resolution, allowed kinds per post type) — shared by the browser (components/CreatePost.tsx) and lib/actions.ts so both agree on what's a valid attachment
 lib/types.ts    shared DB row / joined-query types
 lib/hooks.ts    shared client hooks (e.g. useClickOutside, used by components/OptionsMenu.tsx)
+lib/constants.ts  small shared constants (currently just PAGE_SIZE, used by both feed and search pagination)
 modal/embed.py  CLIP embedding worker, deployed separately via `modal deploy`
 supabase/migrations/  hand-written numbered SQL, applied manually in the Supabase SQL editor (no CLI migration runner in use)
 ```
@@ -28,8 +29,20 @@ supabase/migrations/  hand-written numbered SQL, applied manually in the Supabas
 
 Access is admin-gated, not open signup:
 - `sendOtp` (lib/actions.ts) only emails a real OTP if a `profiles` row already exists for that email. Otherwise it upserts a row into `access_requests` (status `pending`) and returns `{ pending: true }` — no account or auth user is created yet.
-- An admin (`profiles.is_admin`) approves/denies via `/admin/requests` (`approveAccessRequest` / `denyAccessRequest`), which creates the Supabase auth user on approval. Account existence therefore implies approval.
+- An admin (`profiles.is_admin`) approves/denies via `/admin/requests` (`approveAccessRequest` / `denyAccessRequest`), which creates the Supabase auth user on approval. Account existence therefore implies approval. `createUser` sets no password, so a freshly-approved account can only sign in via OTP until the user sets one themselves.
 - `proxy.ts` redirects unauthenticated requests to `/login` for everything except `_next/*`, `favicon.ico`, and `/api/embed*` (those routes use their own header-secret auth instead of cookies — see below).
+
+**Password login is the default `/login` view, OTP is the fallback.** `app/login/page.tsx` has three modes (`password` | `otp` | `reset`):
+- `signInWithPassword(identifier, password)` accepts either an email or a username as `identifier`. Since Supabase Auth only knows emails, a username is first resolved to its account email via `resolveLoginEmail` (lib/actions.ts) using the admin client — the caller isn't authenticated yet, and `profiles` SELECT is RLS-gated to `authenticated`, so an anon lookup has to bypass RLS. Both the "unknown identifier" and "wrong password" cases return the same generic error to avoid leaking which accounts exist.
+- Password reset reuses the same emailed-OTP mechanism as sign-in rather than a magic-link callback route: `requestPasswordReset` calls `supabase.auth.resetPasswordForEmail`, and `confirmPasswordReset` calls `supabase.auth.verifyOtp({ type: 'recovery' })` then `updateUser({ password })`. This needed no new redirect/callback route, but does mean the Supabase dashboard's "Reset Password" email template must include `{{ .Token }}` (the same way the sign-in OTP template already does) for the code to actually show up in the email.
+- New users have no username or password until they set one — `setUsername`/`setPassword` (lib/actions.ts) are the only way, from `/profile/[username]` (see below).
+
+## Profile page (`/profile/[username]`)
+
+`app/profile/[username]/page.tsx` resolves the route param via `getProfile` (lib/actions.ts), which looks up by `username` normally, or by `id` if the param is a UUID — this lets `NavBar`'s "Profile" link point at `/profile/<uid>` for a user who hasn't picked a username yet (`/profile/${username ?? userId}`), since there'd otherwise be no URL that resolves to their own profile.
+- Viewing your own profile (`profile.id === user.id`) renders `components/ProfileForm.tsx`, which lets you set/change `profiles.username` (lowercase-normalized, `^[a-z0-9_]{3,20}$`, enforced by both the client-side action and a DB CHECK constraint + unique index in `010_username_password_auth.sql`) and change your password (`setPassword`, min 8 chars, no current-password check needed since it runs against the already-authenticated session).
+- Viewing anyone else's profile is a read-only display (display name + `@username`) — there's no admin-only or other-user editing path here.
+- Username updates go through the existing `profiles` RLS UPDATE policy (`auth.uid() = id`, already used as both `USING` and `WITH CHECK` since none was specified) — no new RLS policy was needed. Password changes go through Supabase Auth's session-scoped `updateUser`, not the `profiles` table at all.
 
 ## Post creation (client-driven, multi-step)
 
@@ -47,9 +60,19 @@ If any step throws, `CreatePost.tsx` best-effort calls `deletePost` on the parti
 1. See "Post creation" above — `finalizePost` is what schedules the embed kickoff.
 2. `/api/embed` (checked via `x-embed-secret` header) resolves public media URLs (paired with each attachment's `media_type`) and calls the Modal `embed` endpoint, which immediately `spawn`s a background job and returns 202. Modal fetches media by public URL itself (`_load_image_from_url`/`_extract_keyframes` in `modal/embed.py`) rather than receiving bytes from Next.js, which is why the direct-to-Storage upload flow above needed no changes on the Modal side.
 3. Modal embeds the caption text plus any `image`/`video` attachments with CLIP (video is keyframe-sampled); `audio`/`file` attachments are skipped since CLIP can't encode them — those posts embed from caption text alone. The resulting 512-dim vector is POSTed to `/api/embed/callback` (checked via `Authorization: Bearer EMBED_CALLBACK_SECRET`), which writes it onto `posts.embedding` using the service-role client.
-4. Search (`/search`) embeds the query text via `/api/embed/query` → Modal `embed_query` (synchronous, text-only), then calls the `search_posts` Postgres RPC (pgvector cosine distance) and re-fetches full post rows in similarity order.
+4. Search (`/search`, via `searchPosts` in `lib/actions.ts`) embeds the query text through `/api/embed/query` → Modal `embed_query` (synchronous, text-only) — a failed/slow Modal call falls back to `embedding: null` rather than failing the whole search, since full-text search below doesn't need it. It then calls the `search_posts` Postgres RPC and re-fetches full post rows in the RPC's returned order.
 
-Two independent shared secrets gate this: `EMBED_SECRET` (Next.js route ↔ Next.js route / Modal dispatch) and `EMBED_CALLBACK_SECRET` (Modal → Next.js callback, set in the Modal secret named `family-app`).
+`search_posts(query_text, query_embedding, match_count, result_offset)` (migrations `008_fulltext_search.sql`, `009_search_pagination.sql`) is a hybrid ranker, not pure pgvector: it full-text-searches `posts.caption_tsv` (a generated `tsvector` column, GIN-indexed) via `websearch_to_tsquery` alongside the pgvector cosine-distance search, full-outer-joins the two candidate sets, and orders `is_exact DESC, text_rank DESC, similarity DESC` — i.e. an exact caption substring match always outranks a stemmed/fuzzy text match, which always outranks a semantic-only (embedding) match. `result_offset` paginates through that same ordering (see "Feed & search pagination" below); the internal candidate-pool `LIMIT`s scale with `match_count + result_offset` so deeper pages don't miss candidates that should rank ahead of them.
+
+Two independent shared secrets gate the embedding pipeline itself: `EMBED_SECRET` (Next.js route ↔ Next.js route / Modal dispatch) and `EMBED_CALLBACK_SECRET` (Modal → Next.js callback, set in the Modal secret named `family-app`).
+
+## Feed & search pagination (infinite scroll)
+
+Both `/` and `/search` load `PAGE_SIZE` (`lib/constants.ts`, currently 5) posts server-side on first render, then fetch more as the user scrolls:
+- `app/page.tsx` / `app/search/page.tsx` call `getFeedPosts(0)` / `searchPosts(query, 0)` (`lib/actions.ts`) for the initial batch and pass `{ posts, hasMore }` down to `components/Feed.tsx` / `components/SearchResults.tsx`.
+- Those components are thin wrappers around `components/InfiniteScroll.tsx` (client), which owns the accumulated post list and an `IntersectionObserver` on a trailing sentinel div; each observer trigger calls the same `getFeedPosts`/`searchPosts` action again with `offset = posts.length` and appends the result.
+- The home feed pages by `created_at DESC` (`.range()`), a stable total order so offset pagination can't skip/duplicate rows as new posts are created between loads. Search pages via `search_posts`'s `result_offset` (see above), which preserves the same exact/text/semantic tiering across pages.
+- Because `getFeedPosts`/`searchPosts` are the single source of truth for both the initial RSC load and subsequent client-triggered pages, there's no duplicated select-shape or embed-fetch logic to keep in sync.
 
 ## Data model notes
 
@@ -58,6 +81,7 @@ Two independent shared secrets gate this: `EMBED_SECRET` (Next.js route ↔ Next
 - `text` post captions render as markdown (`components/MarkdownContent.tsx`, `react-markdown` + `remark-gfm`, no raw HTML support) — other post types show captions as plain text.
 - `comments.parent_id` self-references for threaded replies; the tree is built client-side in `components/Comments.tsx` (`buildTree`) and rendered recursively by `components/CommentThread.tsx`.
 - Migration `003_post_edit.sql` fixed an RLS bug worth remembering: the original "service role updates embedding" UPDATE policy on `posts` had no `USING`/`WITH CHECK` scoping, so it let *any* authenticated user overwrite *any* post. When adding or editing RLS policies, always scope `USING`/ `WITH CHECK` to the owning user explicitly.
+- `posts.caption_tsv` (migration `008_fulltext_search.sql`) is a generated `tsvector` column (`to_tsvector('english', coalesce(caption, ''))`), GIN-indexed, covering every post type's caption (not just `text` posts) — see "Embedding / search pipeline" above for how it's combined with embedding similarity in `search_posts`.
 
 ## Env vars
 

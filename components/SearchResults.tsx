@@ -1,26 +1,26 @@
 'use client'
 
 import { Post } from '@/lib/types'
-import PostCard from './PostCard'
+import { searchPosts } from '@/lib/actions'
+import InfiniteScroll from './InfiniteScroll'
 
 interface Props {
   query: string
   posts: Post[]
+  hasMore: boolean
   currentUserId: string
 }
 
-export default function SearchResults({ query, posts, currentUserId }: Props) {
-  return (
-    <div className="space-y-6">
-      {query && posts.length === 0 && (
-        <p className="text-sm text-gray-400 text-center py-8">No results for &ldquo;{query}&rdquo;</p>
-      )}
+export default function SearchResults({ query, posts, hasMore, currentUserId }: Props) {
+  if (!query) return null
 
-      <div className="space-y-4">
-        {posts.map(post => (
-          <PostCard key={post.id} post={post} currentUserId={currentUserId} />
-        ))}
-      </div>
-    </div>
+  return (
+    <InfiniteScroll
+      initialPosts={posts}
+      initialHasMore={hasMore}
+      loadMore={offset => searchPosts(query, offset)}
+      currentUserId={currentUserId}
+      emptyMessage={`No results for “${query}”`}
+    />
   )
 }

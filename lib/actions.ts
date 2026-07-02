@@ -4,8 +4,9 @@ import { revalidatePath } from 'next/cache'
 import { after } from 'next/server'
 import { createClient } from './supabase/server'
 import { createAdminClient } from './supabase/admin'
-import { MediaType, PostType } from './types'
+import { MediaType, Post, PostType, Profile } from './types'
 import { TYPE_MEDIA_KINDS } from './mediaKinds'
+import { PAGE_SIZE } from './constants'
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -47,6 +48,121 @@ export async function sendOtp(email: string) {
 export async function verifyOtp(email: string, token: string) {
   const supabase = await createClient()
   const { error } = await supabase.auth.verifyOtp({ email: normalizeEmail(email), token, type: 'email' })
+  if (error) return { error: error.message }
+  return { error: null }
+}
+
+// Password login accepts either an email or a username as the identifier;
+// usernames aren't known to Supabase Auth itself, so a username has to be
+// resolved to its account email first. That lookup needs the admin client
+// since the caller isn't authenticated yet (profiles SELECT is RLS-gated to
+// `authenticated`).
+async function resolveLoginEmail(identifier: string) {
+  const trimmed = identifier.trim()
+  if (trimmed.includes('@')) return normalizeEmail(trimmed)
+
+  const admin = createAdminClient()
+  const { data: profile } = await admin
+    .from('profiles')
+    .select('email')
+    .eq('username', trimmed.toLowerCase())
+    .maybeSingle()
+  return profile?.email ?? null
+}
+
+export async function signInWithPassword(identifier: string, password: string) {
+  const email = await resolveLoginEmail(identifier)
+  // Generic error either way — don't reveal whether the identifier matched
+  // an account, only that the password login attempt failed.
+  if (!email) return { error: 'Invalid username/email or password' }
+
+  const supabase = await createClient()
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) return { error: 'Invalid username/email or password' }
+  return { error: null }
+}
+
+// Reset flow reuses the same emailed-OTP mechanism as sign-in (type
+// 'recovery' instead of 'email') rather than a magic-link callback route,
+// so it needs no new redirect/callback plumbing beyond what sendOtp/verifyOtp
+// already established.
+export async function requestPasswordReset(identifier: string) {
+  const email = await resolveLoginEmail(identifier)
+  // Silently no-op on an unknown identifier so this can't be used to probe
+  // which usernames/emails have accounts.
+  if (email) {
+    const supabase = await createClient()
+    await supabase.auth.resetPasswordForEmail(email)
+  }
+  return { error: null }
+}
+
+export async function confirmPasswordReset(identifier: string, token: string, newPassword: string) {
+  if (newPassword.length < 8) return { error: 'Password must be at least 8 characters.' }
+
+  const email = await resolveLoginEmail(identifier)
+  if (!email) return { error: 'Invalid code' }
+
+  const supabase = await createClient()
+  const { error: verifyError } = await supabase.auth.verifyOtp({ email, token, type: 'recovery' })
+  if (verifyError) return { error: verifyError.message }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) return { error: error.message }
+  return { error: null }
+}
+
+// ── Profile ──────────────────────────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// Looked up by username for the public /profile/[username] route, or by id
+// so a freshly-approved user with no username yet can still reach their own
+// profile (NavBar links to /profile/<uid> until a username is set).
+export async function getProfile(usernameOrId: string) {
+  const supabase = await createClient()
+  const byId = UUID_RE.test(usernameOrId)
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq(byId ? 'id' : 'username', byId ? usernameOrId : usernameOrId.toLowerCase())
+    .maybeSingle()
+
+  if (error) throw error
+  return data as Profile | null
+}
+
+const USERNAME_RE = /^[a-z0-9_]{3,20}$/
+
+export async function setUsername(username: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  const normalized = username.trim().toLowerCase()
+  if (!USERNAME_RE.test(normalized)) {
+    return { error: 'Usernames must be 3-20 characters: lowercase letters, numbers, underscores.' }
+  }
+
+  const { error } = await supabase.from('profiles').update({ username: normalized }).eq('id', user.id)
+  if (error) {
+    if (error.code === '23505') return { error: 'That username is already taken.' }
+    return { error: error.message }
+  }
+
+  revalidatePath(`/profile/${normalized}`)
+  revalidatePath(`/profile/${user.id}`)
+  return { error: null, username: normalized }
+}
+
+export async function setPassword(newPassword: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  if (newPassword.length < 8) return { error: 'Password must be at least 8 characters.' }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
   if (error) return { error: error.message }
   return { error: null }
 }
@@ -323,4 +439,86 @@ export async function deleteComment(commentId: string) {
 
   if (error) throw error
   revalidatePath('/')
+}
+
+// ── Feed / search pagination ─────────────────────────────────────────────
+// Both the initial (server-rendered) page load and subsequent infinite-scroll
+// batches (components/InfiniteScroll.tsx) call these same actions, so there's
+// one source of truth for each query's shape and page size.
+
+const FEED_POST_SELECT = `
+  *,
+  author:profiles!posts_author_id_fkey(*),
+  media:post_media(*),
+  likes(user_id, created_at, user:profiles(*)),
+  comments(*, author:profiles(*))
+`
+
+export async function getFeedPosts(offset: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  const { data, error } = await supabase
+    .from('posts')
+    .select(FEED_POST_SELECT)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + PAGE_SIZE - 1)
+
+  if (error) throw error
+  const posts = (data ?? []) as unknown as Post[]
+  return { posts, hasMore: posts.length === PAGE_SIZE }
+}
+
+export async function searchPosts(query: string, offset: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  if (!query.trim()) return { posts: [], hasMore: false }
+
+  // Get query embedding from Modal for semantic search; a failed/slow embed
+  // call shouldn't block full-text search, so fall back to null.
+  let embedding: number[] | null = null
+  try {
+    const embedRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/embed/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-embed-secret': process.env.EMBED_SECRET! },
+      body: JSON.stringify({ text: query }),
+      cache: 'no-store',
+    })
+    if (embedRes.ok) {
+      embedding = (await embedRes.json()).embedding
+    }
+  } catch {
+    // Modal unreachable — proceed with full-text search only.
+  }
+
+  const { data: results } = await supabase.rpc('search_posts', {
+    query_text: query,
+    query_embedding: embedding,
+    match_count: PAGE_SIZE,
+    result_offset: offset,
+  })
+
+  if (!results || results.length === 0) return { posts: [], hasMore: false }
+
+  const postIds = results.map((r: { post_id: string }) => r.post_id)
+  const { data } = await supabase
+    .from('posts')
+    .select(`*, author:profiles!posts_author_id_fkey(*), media:post_media(*), likes(user_id)`)
+    .in('id', postIds)
+
+  // Preserve the RPC's rerank ordering (exact match > text match > similarity)
+  const byId = Object.fromEntries((data ?? []).map((p: { id: string }) => [p.id, p]))
+  const posts = results
+    .map((r: { post_id: string; similarity: number; text_rank: number; is_exact: boolean }) => ({
+      ...byId[r.post_id],
+      similarity: r.similarity,
+      text_rank: r.text_rank,
+      is_exact: r.is_exact,
+    }))
+    .filter((p: { id: string }) => p.id) as Post[]
+
+  return { posts, hasMore: results.length === PAGE_SIZE }
 }
