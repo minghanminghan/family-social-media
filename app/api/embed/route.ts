@@ -21,10 +21,12 @@ export async function POST(req: NextRequest) {
 
   if (!post) return NextResponse.json({ error: 'Post not found' }, { status: 404 })
 
-  // Resolve public URLs for media
-  const mediaUrls = (post.media ?? []).map((m: { storage_path: string }) => {
+  // Resolve public URLs for media, paired with each item's media_type so
+  // Modal knows how to embed it (CLIP only supports image/video content;
+  // audio/file attachments contribute caption text only, see modal/embed.py)
+  const media = (post.media ?? []).map((m: { storage_path: string; media_type: string }) => {
     const { data } = supabase.storage.from('media').getPublicUrl(m.storage_path)
-    return data.publicUrl
+    return { url: data.publicUrl, media_type: m.media_type }
   })
 
   // Modal embeds in the background and POSTs the result to /api/embed/callback
@@ -39,7 +41,7 @@ export async function POST(req: NextRequest) {
       post_id,
       type: post.type,
       caption: post.caption,
-      media_urls: mediaUrls,
+      media,
       callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/embed/callback`,
     }),
   })

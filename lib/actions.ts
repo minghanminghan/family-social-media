@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { after } from 'next/server'
 import { createClient } from './supabase/server'
 import { createAdminClient } from './supabase/admin'
-import { PostType } from './types'
+import { MediaType, PostType } from './types'
+import { TYPE_MEDIA_KINDS } from './mediaKinds'
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -122,75 +123,87 @@ export async function denyAccessRequest(requestId: string) {
 
 // ── Posts ──────────────────────────────────────────────────────────────────
 
-// Storage path/media_type are derived from this whitelist rather than the
-// client-supplied filename or File.type directly, since both are attacker-
-// controlled and were previously used unsanitized to build the storage path.
-const MEDIA_EXTENSIONS: Record<string, string> = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/heic': 'heic',
-  'video/mp4': 'mp4',
-  'video/quicktime': 'mov',
-  'video/webm': 'webm',
-}
-
-export async function createPost(formData: FormData) {
+// Post creation is split into three steps because large files (video,
+// multi-slide carousels) are uploaded directly from the browser to Supabase
+// Storage rather than through this server action — Next.js Server Actions
+// and Vercel's function payload limit both cap request bodies well below
+// what a video upload needs. The client:
+//   1. createPost        — inserts the post row, returns its id
+//   2. (browser uploads each file straight to Storage under that post id)
+//   3. attachPostMedia    — records the uploaded paths as post_media rows
+//   4. finalizePost       — kicks off embedding once media rows (if any) exist
+export async function createPost(type: PostType, caption: string | null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Unauthenticated')
 
-  const type = formData.get('type') as PostType
-  const caption = formData.get('caption') as string | null
-  const files = formData.getAll('media') as File[]
-
   const { data: post, error } = await supabase
     .from('posts')
-    .insert({ author_id: user.id, type, caption: caption || null })
+    .insert({ author_id: user.id, type, caption: caption?.trim() || null })
     .select()
     .single()
 
   if (error) throw error
+  return post
+}
 
-  // Upload media files
-  if (files.length > 0 && files[0].size > 0) {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      const ext = MEDIA_EXTENSIONS[file.type]
-      if (!ext) throw new Error(`Unsupported file type: ${file.type}`)
-      const mediaType = file.type.startsWith('video/') ? 'video' : 'image'
-      const path = `${user.id}/${post.id}/${i}.${ext}`
+export async function attachPostMedia(
+  postId: string,
+  items: { storage_path: string; media_type: MediaType; original_filename: string | null }[]
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
 
-      const { error: uploadError } = await supabase.storage
-        .from('media')
-        .upload(path, file, { contentType: file.type })
+  const { data: post, error: postError } = await supabase
+    .from('posts')
+    .select('type, author_id')
+    .eq('id', postId)
+    .single()
+  if (postError) throw postError
+  if (post.author_id !== user.id) throw new Error('Forbidden')
 
-      if (uploadError) throw uploadError
-
-      await supabase.from('post_media').insert({
-        post_id: post.id,
-        position: i,
-        storage_path: path,
-        media_type: mediaType,
-      })
+  // The client picks the storage path it uploads to, so re-check it actually
+  // landed under this user's own post prefix (matching the storage RLS
+  // policy) rather than trusting an arbitrary client-supplied path — e.g. a
+  // path pointing at another post's already-public media.
+  const allowedKinds = TYPE_MEDIA_KINDS[post.type as PostType]
+  const expectedPrefix = `${user.id}/${postId}/`
+  const rows = items.map((item, i) => {
+    if (!item.storage_path.startsWith(expectedPrefix)) {
+      throw new Error('Invalid storage path')
     }
-  }
+    if (!allowedKinds.includes(item.media_type)) {
+      throw new Error(`File "${item.original_filename ?? item.storage_path}" doesn't match post type "${post.type}"`)
+    }
+    return {
+      post_id: postId,
+      position: i,
+      storage_path: item.storage_path,
+      media_type: item.media_type,
+      original_filename: item.original_filename,
+    }
+  })
 
+  const { error } = await supabase.from('post_media').insert(rows)
+  if (error) throw error
+}
+
+export async function finalizePost(postId: string) {
   // Post (with file contents already stored) is ready to render immediately.
   // Embedding runs after the response is sent, so it never blocks the post
   // from showing up on refresh; /api/embed upserts the embedding back in
-  // once Modal responds.
+  // once Modal responds. Modal fetches media by public URL rather than
+  // receiving bytes here, so it needs no changes for direct browser uploads.
   after(() =>
     fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-embed-secret': process.env.EMBED_SECRET! },
-      body: JSON.stringify({ post_id: post.id }),
+      body: JSON.stringify({ post_id: postId }),
     }).catch(err => console.error('Embed kickoff failed', err))
   )
 
   revalidatePath('/')
-  return post
 }
 
 export async function editPost(postId: string, caption: string) {

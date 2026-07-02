@@ -2,10 +2,12 @@
 Modal CLIP embedding worker.
 
 Exposes two web endpoints:
-  POST /embed        — accepts a post (text, image, video, carousel), embeds it in
-                        the background, and POSTs the result to the caller-provided
+  POST /embed        — accepts a post (text, media [image/video], audio, file), embeds
+                        it in the background, and POSTs the result to the caller-provided
                         callback_url when done (so the HTTP request returns instantly
-                        instead of holding the caller open for the GPU job)
+                        instead of holding the caller open for the GPU job). CLIP only
+                        embeds visual content, so audio/file attachments contribute only
+                        the post's caption text, not the attachment content itself.
   POST /embed_query  — embed a search query text → 512-dim vector (synchronous;
                         text-only encoding is fast enough to return inline)
 
@@ -121,34 +123,28 @@ class Embedder:
         return frames if frames else None
 
     @modal.method()
-    def embed_post(self, post_type: str, caption: str | None, media_urls: list[str]) -> list[float]:
+    def embed_post(self, caption: str | None, media: list[dict]) -> list[float]:
         vecs = []
 
         if caption:
             text_vec = self._embed_texts([caption])[0]
             vecs.append(text_vec)
 
-        if post_type == "text":
-            pass  # already handled caption above
-
-        elif post_type == "image":
-            for url in media_urls:
+        # CLIP has no audio/document encoder, so audio and file attachments
+        # rely entirely on the caption text embedded above; only image/video
+        # media_type items get their content embedded here.
+        for item in media:
+            url, media_type = item["url"], item["media_type"]
+            if media_type == "image":
                 img = self._load_image_from_url(url)
                 img_vec = self._embed_images([img])[0]
                 vecs.append(img_vec)
 
-        elif post_type == "video":
-            for url in media_urls:
+            elif media_type == "video":
                 frames = self._extract_keyframes(url)
                 if frames:
                     frame_vecs = self._embed_images(frames)
                     vecs.append(frame_vecs.mean(axis=0))
-
-        elif post_type == "carousel":
-            for url in media_urls:
-                img = self._load_image_from_url(url)
-                img_vec = self._embed_images([img])[0]
-                vecs.append(img_vec)
 
         if not vecs:
             raise ValueError("No content to embed")
@@ -166,9 +162,8 @@ class Embedder:
 @app.function(image=image, secrets=[modal.Secret.from_name("family-app")], timeout=300)
 def embed_and_notify(
     post_id: str,
-    post_type: str,
     caption: str | None,
-    media_urls: list[str],
+    media: list[dict],
     callback_url: str,
 ) -> None:
     """Runs the (potentially slow, GPU-bound) embedding job, then reports the
@@ -176,7 +171,7 @@ def embed_and_notify(
     invocation (via .spawn) so the original HTTP request isn't held open."""
     callback_secret = os.environ["EMBED_CALLBACK_SECRET"]
     try:
-        vector = Embedder().embed_post.remote(post_type, caption, media_urls)
+        vector = Embedder().embed_post.remote(caption, media)
         payload = {"post_id": post_id, "embedding": vector}
     except Exception as e:
         payload = {"post_id": post_id, "error": str(e)}
@@ -200,7 +195,7 @@ async def embed(request: Request):
     post_id = body.get("post_id")
     post_type = body.get("type")
     caption = body.get("caption")
-    media_urls = body.get("media_urls", [])
+    media = body.get("media", [])
     callback_url = body.get("callback_url")
 
     if not post_type:
@@ -208,7 +203,7 @@ async def embed(request: Request):
     if not callback_url:
         raise HTTPException(status_code=400, detail="Missing callback_url")
 
-    embed_and_notify.spawn(post_id, post_type, caption, media_urls, callback_url)
+    embed_and_notify.spawn(post_id, caption, media, callback_url)
 
     return JSONResponse({"post_id": post_id, "status": "accepted"}, status_code=202)
 

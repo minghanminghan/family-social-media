@@ -1,5 +1,5 @@
-export type PostType = 'text' | 'image' | 'video' | 'carousel'
-export type MediaType = 'image' | 'video'
+export type PostType = 'text' | 'media' | 'audio' | 'file'
+export type MediaType = 'image' | 'video' | 'audio' | 'file'
 
 export interface Profile {
   id: string
@@ -14,6 +14,7 @@ export interface PostMedia {
   position: number
   storage_path: string
   media_type: MediaType
+  original_filename: string | null
   created_at: string
 }
 

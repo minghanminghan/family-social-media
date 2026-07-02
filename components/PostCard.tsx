@@ -7,6 +7,7 @@ import { toggleLike, deletePost, editPost } from '@/lib/actions'
 import MediaCarousel from './MediaCarousel'
 import Comments from './Comments'
 import OptionsMenu from './OptionsMenu'
+import MarkdownContent from './MarkdownContent'
 import { createClient } from '@/lib/supabase/client'
 
 const MAX_VISIBLE_LIKERS = 5
@@ -94,12 +95,45 @@ export default function PostCard({ post, currentUserId }: Props) {
       </div>
 
       {/* Media */}
-      {post.media && post.media.length > 0 && (
+      {post.type === 'media' && post.media && post.media.length > 0 && (
         <MediaCarousel
           items={[...post.media].sort((a, b) => a.position - b.position)}
           getUrl={getMediaUrl}
           alt={post.caption ?? ''}
         />
+      )}
+
+      {post.type === 'audio' && post.media && post.media.length > 0 && (
+        <div className="px-4 pt-3 space-y-2">
+          {[...post.media].sort((a, b) => a.position - b.position).map(m => (
+            <div key={m.id}>
+              {m.original_filename && (
+                <p className="text-xs text-gray-500 mb-1">{m.original_filename}</p>
+              )}
+              <audio controls src={getMediaUrl(m.storage_path)} className="w-full" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {post.type === 'file' && post.media && post.media.length > 0 && (
+        <div className="px-4 pt-3 space-y-2">
+          {[...post.media].sort((a, b) => a.position - b.position).map(m => (
+            <a
+              key={m.id}
+              href={getMediaUrl(m.storage_path)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 text-sm border border-gray-200 rounded-lg px-3 py-2 hover:border-gray-400"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-gray-400">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                <path d="M14 2v6h6" />
+              </svg>
+              <span className="truncate">{m.original_filename ?? m.storage_path.split('/').pop()}</span>
+            </a>
+          ))}
+        </div>
       )}
 
       {/* Caption */}
@@ -129,7 +163,15 @@ export default function PostCard({ post, currentUserId }: Props) {
           </div>
         </div>
       ) : (
-        post.caption && <p className="px-4 pt-3 pb-1 text-sm">{post.caption}</p>
+        post.caption && (
+          <div className="px-4 pt-3 pb-1">
+            {post.type === 'text' ? (
+              <MarkdownContent content={post.caption} />
+            ) : (
+              <p className="text-sm">{post.caption}</p>
+            )}
+          </div>
+        )
       )}
 
       {/* Actions */}
