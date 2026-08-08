@@ -4,9 +4,9 @@ import { revalidatePath } from 'next/cache'
 import { after } from 'next/server'
 import { createClient } from './supabase/server'
 import { createAdminClient } from './supabase/admin'
-import { MediaType, Post, PostType, Profile } from './types'
+import { GalleryItem, GalleryPost, GalleryTab, MediaType, Post, PostType, Profile } from './types'
 import { TYPE_MEDIA_KINDS } from './mediaKinds'
-import { PAGE_SIZE } from './constants'
+import { GALLERY_PAGE_SIZE, PAGE_SIZE } from './constants'
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -521,4 +521,95 @@ export async function searchPosts(query: string, offset: number) {
     .filter((p: { id: string }) => p.id) as Post[]
 
   return { posts, hasMore: results.length === PAGE_SIZE }
+}
+
+// ── Media gallery (/media) ────────────────────────────────────────────────
+// One action serves all three tabs so the client has a single loader and
+// paginator. `media`/`documents` page over post_media rows directly (not
+// posts), so one post's attachments can straddle a page boundary; `links`
+// pages over posts and can yield several items per row, which is why the
+// caller pages by an explicit `nextOffset` (rows consumed) rather than by
+// the number of items it has accumulated.
+
+const GALLERY_TAB_KINDS: Record<'media' | 'documents', MediaType[]> = {
+  media: ['image', 'video'],
+  documents: ['audio', 'file'],
+}
+
+const GALLERY_POST_SELECT = 'id, caption, created_at, author:profiles!posts_author_id_fkey(*)'
+
+// Only http(s) is matched, so an extracted URL can never end up as a
+// javascript:/data: href in the Links tab.
+const CAPTION_URL_RE = /https?:\/\/[^\s<>"']+/g
+// A URL is only real if the scheme is followed by an actual host character.
+const CAPTION_URL_VALID_RE = /^https?:\/\/[a-z0-9]/i
+const CLOSERS: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
+
+function count(haystack: string, char: string) {
+  return haystack.split(char).length - 1
+}
+
+// Captions end sentences right after a URL and markdown often wraps one in
+// parens/brackets, so trailing punctuation has to come off — but a closing
+// bracket that's balanced *within* the URL belongs to it (e.g. the Wikipedia
+// ".../Turing_(disambiguation)" form), so only unbalanced ones are stripped.
+function trimUrl(raw: string) {
+  let url = raw
+  while (url.length > 0) {
+    const last = url[url.length - 1]
+    const opener = CLOSERS[last]
+    if (opener ? count(url, opener) >= count(url, last) : !',.;:!?'.includes(last)) break
+    url = url.slice(0, -1)
+  }
+  return url
+}
+
+function extractUrls(caption: string | null) {
+  const urls = (caption?.match(CAPTION_URL_RE) ?? []).map(trimUrl).filter(url => CAPTION_URL_VALID_RE.test(url))
+  return [...new Set(urls)]
+}
+
+export async function getGalleryItems(tab: GalleryTab, offset: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthenticated')
+
+  // Server actions are POST endpoints, so neither argument can be trusted to
+  // be what the typings say — an unknown tab would otherwise reach
+  // GALLERY_TAB_KINDS[tab] as undefined and a negative offset would build an
+  // invalid PostgREST range.
+  if (tab !== 'links' && !Object.hasOwn(GALLERY_TAB_KINDS, tab)) throw new Error('Invalid tab')
+  const parsedOffset = Math.floor(Number(offset))
+  const start = Number.isFinite(parsedOffset) ? Math.max(0, parsedOffset) : 0
+
+  if (tab === 'links') {
+    const { data, error } = await supabase
+      .from('posts')
+      .select(GALLERY_POST_SELECT)
+      // Cheap pre-filter so a page isn't mostly captions with no link in
+      // them; extractUrls below is what actually decides.
+      .or('caption.ilike.%http://%,caption.ilike.%https://%')
+      .order('created_at', { ascending: false })
+      .range(start, start + GALLERY_PAGE_SIZE - 1)
+
+    if (error) throw error
+    const posts = (data ?? []) as unknown as GalleryPost[]
+    const items: GalleryItem[] = posts.flatMap(post =>
+      extractUrls(post.caption).map(url => ({ kind: 'link' as const, url, post }))
+    )
+    return { items, hasMore: posts.length === GALLERY_PAGE_SIZE, nextOffset: start + posts.length }
+  }
+
+  const { data, error } = await supabase
+    .from('post_media')
+    .select(`*, post:posts!inner(${GALLERY_POST_SELECT})`)
+    .in('media_type', GALLERY_TAB_KINDS[tab])
+    .order('created_at', { ascending: false })
+    .order('position', { ascending: true })
+    .range(start, start + GALLERY_PAGE_SIZE - 1)
+
+  if (error) throw error
+  const rows = (data ?? []) as unknown as (Omit<Extract<GalleryItem, { kind: 'attachment' }>, 'kind'>)[]
+  const items: GalleryItem[] = rows.map(row => ({ kind: 'attachment' as const, ...row }))
+  return { items, hasMore: rows.length === GALLERY_PAGE_SIZE, nextOffset: start + rows.length }
 }

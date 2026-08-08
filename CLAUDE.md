@@ -74,6 +74,14 @@ Both `/` and `/search` load `PAGE_SIZE` (`lib/constants.ts`, currently 5) posts 
 - The home feed pages by `created_at DESC` (`.range()`), a stable total order so offset pagination can't skip/duplicate rows as new posts are created between loads. Search pages via `search_posts`'s `result_offset` (see above), which preserves the same exact/text/semantic tiering across pages.
 - Because `getFeedPosts`/`searchPosts` are the single source of truth for both the initial RSC load and subsequent client-triggered pages, there's no duplicated select-shape or embed-fetch logic to keep in sync.
 
+## Media gallery (`/media`)
+
+A WhatsApp-style view of everything already attached to posts, linked from `NavBar` (right of "Profile"). `components/MediaGallery.tsx` (client) owns a three-tab segmented control — **Media** (image/video), **Links**, **Documents** (audio/file) — and all three tabs load through one server action, `getGalleryItems(tab, offset)` (`lib/actions.ts`):
+- Media/Documents page over `post_media` rows directly (filtered by `media_type`, `created_at DESC`), each joined to a trimmed post (`id, caption, created_at, author`) so a thumbnail/row can attribute itself and link back to `/post/[id]`. Because paging is over attachments rather than posts, one post's attachments can straddle a page boundary — that's intended.
+- Links has no table of its own: it pages over `posts` pre-filtered with `caption ilike '%http…%'` (cheap index-free narrowing) and extracts URLs from the caption with a regex, so one row can yield several items. That mismatch between rows fetched and items produced is why `getGalleryItems` returns an explicit `nextOffset` (rows consumed) and `MediaGallery` paginates on it, instead of using `items.length` the way `InfiniteScroll` uses `posts.length`.
+- Each tab keeps its own accumulated list + offset, so switching back and forth doesn't refetch. Only the Media tab is rendered server-side (`app/media/page.tsx`); the others load on first switch. The in-flight guard is per tab, since switching mid-load starts a second request whose result belongs to a different tab.
+- `components/InfiniteScroll.tsx` isn't reused here — it's hard-wired to `PostCard` and to `offset = posts.length`; the gallery uses `GALLERY_PAGE_SIZE` (`lib/constants.ts`, 24) since a page is thumbnails/rows rather than full post cards.
+
 ## Data model notes
 
 - `posts.type` is `text | media | audio | file` (`media` covers image/video, incl. multi-file carousels — collapsed from the original `image | video | carousel` split by migration `007_media_types.sql`, which also migrated existing rows). `post_media.media_type` is `image | video | audio | file`; rows are ordered by `position` for multi-file posts. `lib/mediaKinds.ts` whitelists upload MIME types → `{ext, kind}` and `attachPostMedia` rejects any file whose kind doesn't match the post's `type` (e.g. no image in an `audio` post).

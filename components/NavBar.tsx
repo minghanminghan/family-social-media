@@ -33,6 +33,9 @@ export default function NavBar({
         <Link href={`/profile/${username ?? userId}`} className="text-xs text-gray-400 hover:text-gray-700 shrink-0">
           Profile
         </Link>
+        <Link href="/media" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">
+          Media
+        </Link>
         {isAdmin && (
           <Link href="/admin/requests" className="text-xs text-gray-400 hover:text-gray-700 shrink-0">
             Admin

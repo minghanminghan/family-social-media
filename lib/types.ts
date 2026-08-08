@@ -49,6 +49,24 @@ export interface Comment {
   author?: Profile
 }
 
+// ── /media gallery ────────────────────────────────────────────────────────
+// The gallery groups things already attached to posts into WhatsApp-style
+// tabs: image/video attachments, links found in captions, and audio/file
+// attachments. Every item carries just enough of its post to attribute it
+// and link back to /post/[id].
+export type GalleryTab = 'media' | 'links' | 'documents'
+
+export interface GalleryPost {
+  id: string
+  caption: string | null
+  created_at: string
+  author: Profile | null
+}
+
+export type GalleryItem =
+  | ({ kind: 'attachment'; post: GalleryPost } & PostMedia)
+  | { kind: 'link'; url: string; post: GalleryPost }
+
 export interface SearchResult {
   post: Post
   similarity: number
